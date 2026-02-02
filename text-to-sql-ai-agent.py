@@ -63,7 +63,7 @@ def rel_db_relationship():
 """
 
 @tool
-def generate_sql(user_query: str, table_names: str, schema_info: str, db_relationship: str, llm_model) -> str:
+def generate_sql(user_query: str, table_names: str, schema_info: str, db_relationship: str) -> str:
     """Generate SQL query from natural language."""
     dialect = "DuckDB"
 
@@ -91,8 +91,7 @@ def generate_sql(user_query: str, table_names: str, schema_info: str, db_relatio
     - Returns only the SQL query without any additional text.
     """
 
-    llm = llm_model
-
+    llm = ChatOpenAI(model="gpt-4o-mini-2024-07-18", temperature=0.2)
     response = llm.invoke(input=prompt)
     sql_query = response.content.strip()
     return sql_query
@@ -202,7 +201,7 @@ def execute_sql(sql_query: str) -> str:
         """
 
 @tool
-def fix_sql_error(sql_query: str, error_message: str, llm_model) -> str:
+def fix_sql_error(sql_query: str, error_message: str) -> str:
     """Fix SQL query based on error message using the language model."""
     prompt = f"""
     The following SQL query resulted in an error when executed:
@@ -221,12 +220,12 @@ def fix_sql_error(sql_query: str, error_message: str, llm_model) -> str:
     - Return only the corrected SQL query without any additional text.
     """
 
-    llm = llm_model
+    llm = ChatOpenAI(model="gpt-4o-mini-2024-07-18", temperature=0.2)
     response = llm.invoke(input=prompt)
     return response.content.strip()
 
 @tool
-def result_analyzer(user_query: str, sql_query: str, result: str, llm_model) -> str:
+def result_analyzer(user_query: str, sql_query: str, result: str) -> str:
     """Analyze the SQL execution result and provide insights."""
     prompt = f"""
     # User Query:
@@ -247,10 +246,44 @@ def result_analyzer(user_query: str, sql_query: str, result: str, llm_model) -> 
     - If the result is empty or does not address the user query, suggest specific changes to improve it.
     """
 
-    llm = llm_model
+    llm = ChatOpenAI(model="gpt-4o-mini-2024-07-18", temperature=0.2)
     response = llm.invoke(input=prompt)
     return response.content.strip()
 
+def text_to_sql_agent_prompt(user_query: str, table_names: str, schema_relationships: str, column_types: str) -> str:
+    prompt = f"""
+    # User Query:
+    {user_query}
+
+    # System Prompt: 
+    You are a data analyzer expert working with Brazillian e-commerce data. Your task is to analyze user queries and give business insights by generating and executing SQL queries on the database.
+
+    Your workflow for answering questions:
+    1. Use `generate_sql` to create SQL based on the question
+    2. Use `execute_sql` to run the validated query
+    3. If there's an error, use `fix_sql_error` to correct it and try again (up to 3 times)
+    4. Use `result_analyzer` to provide a natural language answer
+
+    Rules when responding:
+    - Use only the provided tools for SQL generation, execution, error fixing, and result analysis. 
+    - Limit results to 100 rows
+    - If a query fails, use the fix tool and try again (up to 3 times)
+    - Provide clear, informative answers. You can also give speculative business insights based on the data.
+    - Be precise with table and column names. Do not invent names or relationships.
+    - Handle errors gracefully and try to fix them (up to 3 times)
+    - If you fail after 3 attempts, explain what went wrong
+    - Always assist the user at the end by asking the user if they need more help.
+
+    Database Schema: 
+    {table_names}
+
+    Column Types:
+    {column_types}
+
+    Schema Relationships:
+    {schema_relationships}
+    """
+    return prompt
 
 if __name__ == "__main__":
     conn = get_db_connection()
@@ -267,7 +300,38 @@ if __name__ == "__main__":
     )
 
     text_to_sql_agent = create_agent(
-        agent = agent_model,
-        tools = [generate_sql, validate_sql, execute_sql, fix_sql_error, result_analyzer],
-        system_message = SystemMessage(content="You are a helpful assistant that translates natural language to SQL queries.")
+        agent_model,
+        tools = [generate_sql, execute_sql, fix_sql_error, result_analyzer],
+        system_prompt = SystemMessage(content=text_to_sql_agent_prompt(
+            user_query="How many unique customers made purchases in March 2018?",
+            table_names=table_names,
+            schema_relationships=rel_db_relationship_info,
+            column_types=column_types
+        ))
     )
+
+    # Interactive mode
+    print("\n=== Text-to-SQL AI Agent ===")
+    print("Ask questions about the e-commerce database. Type 'quit' to exit.\n")
+    
+    while True:
+        user_input = input("Your question: ")
+        if user_input.lower() in ['quit', 'exit', 'q']:
+            print("Goodbye!")
+            break
+        
+        if not user_input.strip():
+            continue
+        
+        try:
+            response = text_to_sql_agent.invoke({
+                "messages": [("user", user_input)]
+            })
+            
+            print("\n=== Agent Response ===")
+            print(response)
+            print("\n")
+        except Exception as e:
+            print(f"\nError: {e}\n")
+
+    
