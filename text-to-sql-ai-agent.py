@@ -7,6 +7,7 @@ import threading
 from dotenv import load_dotenv
 import os
 import re
+import sqlparse
 from pathlib import Path
 
 load_dotenv()
@@ -62,7 +63,7 @@ def rel_db_relationship():
 """
 
 @tool
-def generate_sql(user_query: str, table_names: str, schema_info: str, db_relationship: str, agent_model) -> str:
+def generate_sql(user_query: str, table_names: str, schema_info: str, db_relationship: str, llm_model) -> str:
     """Generate SQL query from natural language."""
     dialect = "DuckDB"
 
@@ -90,27 +91,64 @@ def generate_sql(user_query: str, table_names: str, schema_info: str, db_relatio
     - Returns only the SQL query without any additional text.
     """
 
-    agent = agent_model
+    llm = llm_model
 
-    response = agent.invoke(input=prompt)
+    response = llm.invoke(input=prompt)
     sql_query = response.content.strip()
     return sql_query
 
-@tool
 def validate_sql(sql_query: str) -> str:
-    """Validate generated SQL query to ensure no forbidden statements are present."""
+    """Validate generated SQL query to ensure no forbidden statements are present using both sqlparse and regex."""
     sql_query = sql_query.strip()
     
+    # Clean the query
     clean_query = re.sub(r';\s*$', '', sql_query)
-    clean_query = re.sub(r'```sql\s*', '', clean_query, flags = re.IGNORECASE)
+    clean_query = re.sub(r'```sql\s*', '', clean_query, flags=re.IGNORECASE)
 
+    # Check for multiple statements
     if clean_query.count(";") > 0 or (clean_query.endswith(";") and ";" in clean_query[:-1]):
         return "ERROR: Multiple SQL statements detected. Only single SELECT statements are allowed."
     
     clean_query = clean_query.rstrip(";").strip()
 
+    # Use sqlparse to detect forbidden statements
+    forbidden_types = {
+        'INSERT', 'UPDATE', 'DELETE', 'DROP', 'CREATE', 
+        'ALTER', 'TRUNCATE', 'GRANT', 'REVOKE', 'MERGE', 
+        'COMMIT'
+    }
+    
+    found_statements = []
+    
+    try:
+        parsed = sqlparse.parse(clean_query)
+        
+        for statement in parsed:
+            root_keyword = statement.get_type()
+            
+            if root_keyword in forbidden_types:
+                found_statements.append({
+                    "statement": root_keyword,
+                    "full_query": str(statement).strip()
+                })
+            else:
+                for token in statement.flatten():
+                    if token.is_keyword and token.value.upper() in forbidden_types:
+                        found_statements.append({
+                            "statement": token.value.upper(),
+                            "full_query": "Detected inside sub-query or block"
+                        })
+                        break
+        
+        if found_statements:
+            forbidden_list = ', '.join([s['statement'] for s in found_statements])
+            return f"ERROR: Forbidden SQL statements detected: {forbidden_list}"
+    except Exception as e:
+        print(f"Warning: sqlparse failed ({e}), falling back to regex")
+
+    # Additional regex-based validation as backup
     dangerous_patterns = [
-        r'\b(INSERT|UPDATE|DELETE|ALTER|DROP|CREATE|REPLACE|TRUNCATE)\b',
+        r'\b(INSERT|UPDATE|DELETE|ALTER|DROP|CREATE|REPLACE|TRUNCATE|GRANT|REVOKE|MERGE|COMMIT)\b',
         r'\b(EXEC|EXECUTE)\b',
         r'--',  # SQL comments
         r'/\*',  # Block comments
@@ -118,10 +156,74 @@ def validate_sql(sql_query: str) -> str:
 
     for pattern in dangerous_patterns:
         if re.search(pattern, clean_query, re.IGNORECASE):
-            return f"Error: Unsafe SQL pattern detected"
+            return "ERROR: Unsafe SQL pattern detected"
     
     print("! Query validation passed")
     return f"Valid: {clean_query}"
+
+@tool
+def execute_sql(sql_query: str) -> str:
+    """Execute a SELECT query and return results as a string representation of the data."""
+    try:
+        # Validate first
+        validation_result = validate_sql(sql_query)
+        if validation_result.startswith("ERROR"):
+            return f"""ERROR: Cannot execute SQL. {validation_result}
+
+            Problematic SQL:
+            {sql_query}
+
+            Please regenerate the SQL query without these forbidden operations."""
+        
+        # Get thread-safe connection
+        conn = get_db_connection()
+        
+        # Execute and immediately materialize to DataFrame
+        result = conn.execute(sql_query)
+        df = result.fetchdf()
+        
+        # Return string representation for tool output
+        return df.to_string()
+    
+    except Exception as e:
+        error_msg = str(e)
+        return f"""ERROR: Failed to execute SQL query.
+
+        Error Details: {error_msg}
+
+        Problematic SQL:
+        {sql_query}
+
+        Please analyze the error and regenerate a corrected SQL query. Common issues:
+        - Invalid table/column names (check schema)
+        - Syntax errors
+        - Type mismatches
+        - Missing JOIN conditions
+        """
+
+@tool
+def fix_sql_error(sql_query: str, error_message: str, llm_model) -> str:
+    """Fix SQL query based on error message using the language model."""
+    prompt = f"""
+    The following SQL query resulted in an error when executed:
+
+    SQL Query:
+    {sql_query}
+
+    Error Message:
+    {error_message}
+
+    Please analyze the error and provide a corrected SQL query. Ensure the new query adheres to the following rules:
+    - Fix the issues that caused the error.
+    - Avoid any DML operations.
+    - Ensure all table and column names are valid as per the database schema.
+    - Limit results to 100 rows.
+    - Return only the corrected SQL query without any additional text.
+    """
+
+    llm = llm_model
+    response = llm.invoke(input=prompt)
+    return response.content.strip()
 
 
 if __name__ == "__main__":
@@ -140,6 +242,6 @@ if __name__ == "__main__":
 
     text_to_sql_agent = create_agent(
         agent = agent_model,
-        tools = [generate_sql, validate_sql],
+        tools = [generate_sql, validate_sql, execute_sql, fix_sql_error],
         system_message = SystemMessage(content="You are a helpful assistant that translates natural language to SQL queries.")
     )
