@@ -225,6 +225,32 @@ def fix_sql_error(sql_query: str, error_message: str, llm_model) -> str:
     response = llm.invoke(input=prompt)
     return response.content.strip()
 
+@tool
+def result_analyzer(user_query: str, sql_query: str, result: str, llm_model) -> str:
+    """Analyze the SQL execution result and provide insights."""
+    prompt = f"""
+    # User Query:
+    {user_query}
+
+    # Executed SQL Query:
+    {sql_query}
+
+    # SQL Execution Result:
+    {result}
+
+    # Responding Rules:
+    - Analyze the SQL execution result in the context of the original user query.
+    - Provide a concise summary of the findings from the result.
+    - Use bullet points for clarity.
+    - Use tables for structured data representation when applicable.
+    - Suggest modifications to the SQL query to better align with the user's intent.
+    - If the result is empty or does not address the user query, suggest specific changes to improve it.
+    """
+
+    llm = llm_model
+    response = llm.invoke(input=prompt)
+    return response.content.strip()
+
 
 if __name__ == "__main__":
     conn = get_db_connection()
@@ -242,6 +268,6 @@ if __name__ == "__main__":
 
     text_to_sql_agent = create_agent(
         agent = agent_model,
-        tools = [generate_sql, validate_sql, execute_sql, fix_sql_error],
+        tools = [generate_sql, validate_sql, execute_sql, fix_sql_error, result_analyzer],
         system_message = SystemMessage(content="You are a helpful assistant that translates natural language to SQL queries.")
     )
