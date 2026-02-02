@@ -6,6 +6,7 @@ from langchain_core.messages import SystemMessage
 import threading
 from dotenv import load_dotenv
 import os
+import re
 from pathlib import Path
 
 load_dotenv()
@@ -95,6 +96,34 @@ def generate_sql(user_query: str, table_names: str, schema_info: str, db_relatio
     sql_query = response.content.strip()
     return sql_query
 
+@tool
+def validate_sql(sql_query: str) -> str:
+    """Validate generated SQL query to ensure no forbidden statements are present."""
+    sql_query = sql_query.strip()
+    
+    clean_query = re.sub(r';\s*$', '', sql_query)
+    clean_query = re.sub(r'```sql\s*', '', clean_query, flags = re.IGNORECASE)
+
+    if clean_query.count(";") > 0 or (clean_query.endswith(";") and ";" in clean_query[:-1]):
+        return "ERROR: Multiple SQL statements detected. Only single SELECT statements are allowed."
+    
+    clean_query = clean_query.rstrip(";").strip()
+
+    dangerous_patterns = [
+        r'\b(INSERT|UPDATE|DELETE|ALTER|DROP|CREATE|REPLACE|TRUNCATE)\b',
+        r'\b(EXEC|EXECUTE)\b',
+        r'--',  # SQL comments
+        r'/\*',  # Block comments
+    ]
+
+    for pattern in dangerous_patterns:
+        if re.search(pattern, clean_query, re.IGNORECASE):
+            return f"Error: Unsafe SQL pattern detected"
+    
+    print("! Query validation passed")
+    return f"Valid: {clean_query}"
+
+
 if __name__ == "__main__":
     conn = get_db_connection()
 
@@ -111,6 +140,6 @@ if __name__ == "__main__":
 
     text_to_sql_agent = create_agent(
         agent = agent_model,
-        tools = [generate_sql],
+        tools = [generate_sql, validate_sql],
         system_message = SystemMessage(content="You are a helpful assistant that translates natural language to SQL queries.")
     )
