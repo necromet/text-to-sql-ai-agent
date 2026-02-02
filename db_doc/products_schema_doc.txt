@@ -1,0 +1,13 @@
+# products dataset
+This dataset includes data about the products sold by Olist.
+
+## products schema columns:
+product_id: Unique product identifier
+product_category_name: Root category of product, in Portuguese.
+product_name_lenght: Number of characters extracted from the product name.
+product_description_lenght: Number of characters extracted from the product description.
+product_photos_qty: Number of product published photos
+product_weight_g: Product weight measured in grams.
+product_length_cm: Product length measured in centimeters.
+product_height_cm: Product height measured in centimeters.
+product_width_cm: Product width measured in centimeters.

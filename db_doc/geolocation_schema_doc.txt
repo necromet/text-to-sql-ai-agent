@@ -1,0 +1,9 @@
+# geolocation Dataset
+This dataset has information Brazilian zip codes and its lat/lng coordinates. Use it to plot maps and find distances between sellers and customers.
+
+## geolocation schema columns:
+geolocation_zip_code_prefix: First five digits of zip code.
+geolocation_lat: Latitude.
+geolocation_lng: Longitude.
+geolocation_city: City Name.
+geolocation_state: State.

@@ -1,0 +1,17 @@
+# order_items dataset
+This dataset includes data about the items purchased within each order.
+
+## Example:
+The order_id = 00143d0f86d6fbd9f9b38ab440ac16f5 has 3 items (same product). Each item has the freight calculated accordingly to its measures and weight. To get the total freight value for each order you just have to sum.
+The total order_item value is: 21.33 * 3 = 63.99
+The total freight value is: 15.10 * 3 = 45.30
+The total order value (product + freight) is: 45.30 + 63.99 = 109.29
+
+## order_items schema columns:
+order_id: Order unique identifier.
+order_item_id: Sequential number identifying number of items included in the same order.
+product_id: Product unique identifier.
+seller_id: Seller unique identifier.
+shipping_limit_date: Shows the seller shipping limit date for handling the order over to the logistic partner.
+price: Item price.
+freight_value: Item freight value (if an order has more than one item the freight value is splitted between items)
